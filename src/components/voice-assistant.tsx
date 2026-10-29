@@ -1,10 +1,12 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useCallback } from "react";
+import { useConversation, ConversationProvider } from "@elevenlabs/react";
 
 export type VoiceState =
   | "idle"
   | "connecting"
+  | "connected"
   | "listening"
   | "speaking"
   | "pending_confirmation"
@@ -14,18 +16,44 @@ export interface VoiceAssistantProps {
   onProposalCreated?: (proposal: any) => void;
 }
 
-export function VoiceAssistant({ onProposalCreated }: VoiceAssistantProps) {
-  const [voiceState, setVoiceState] = useState<VoiceState>("idle");
-  const [statusMessage, setStatusMessage] = useState<string>("Ready to start voice conversation");
-  const [signedUrl, setSignedUrl] = useState<string | null>(null);
+function VoiceAssistantInner({ onProposalCreated }: VoiceAssistantProps) {
   const [activeProposal, setActiveProposal] = useState<{ id: string; title: string } | null>(null);
   const [errorDetail, setErrorDetail] = useState<string | null>(null);
+  const [statusMessage, setStatusMessage] = useState<string>("Ready to start voice conversation");
 
-  const socketRef = useRef<WebSocket | null>(null);
+  const conversation = useConversation({
+    onConnect: () => {
+      setStatusMessage("Connected! Speak to your assistant (e.g. 'What are my meetings today?')");
+      setErrorDetail(null);
+    },
+    onDisconnect: () => {
+      setStatusMessage("Voice session ended");
+    },
+    onMessage: (message) => {
+      console.log("ElevenLabs transcript/event:", message);
+    },
+    onError: (err) => {
+      console.error("ElevenLabs conversation error:", err);
+      setErrorDetail(typeof err === "string" ? err : (err as any)?.message || "Voice conversation error");
+      setStatusMessage("Voice error occurred");
+    },
+  });
 
-  const startVoiceSession = async () => {
+  const voiceState: VoiceState =
+    errorDetail
+      ? "error"
+      : activeProposal
+      ? "pending_confirmation"
+      : conversation.status === "connecting"
+      ? "connecting"
+      : conversation.isSpeaking
+      ? "speaking"
+      : conversation.status === "connected"
+      ? "listening"
+      : "idle";
+
+  const startVoiceSession = useCallback(async () => {
     try {
-      setVoiceState("connecting");
       setStatusMessage("Connecting to ElevenLabs Conversational AI...");
       setErrorDetail(null);
 
@@ -33,15 +61,14 @@ export function VoiceAssistant({ onProposalCreated }: VoiceAssistantProps) {
       if (typeof navigator !== "undefined" && navigator.mediaDevices) {
         try {
           await navigator.mediaDevices.getUserMedia({ audio: true });
-        } catch (micErr: any) {
-          setVoiceState("error");
+        } catch {
           setErrorDetail("Microphone access denied. Please allow microphone permissions in your browser.");
           setStatusMessage("Microphone permission required");
           return;
         }
       }
 
-      // Fetch signed session URL from backend
+      // 1. Fetch signed session URL from backend
       const res = await fetch("/api/voice/session", {
         method: "POST",
         headers: {
@@ -55,29 +82,28 @@ export function VoiceAssistant({ onProposalCreated }: VoiceAssistantProps) {
         throw new Error(data.error || "Failed to acquire signed session URL");
       }
 
-      setSignedUrl(data.signedUrl);
-      setVoiceState("listening");
-      setStatusMessage("Listening... Speak to your assistant (e.g. 'What are my meetings today?')");
+      // 2. Start bidirectional audio stream with ElevenLabs
+      await conversation.startSession({
+        signedUrl: data.signedUrl,
+      });
     } catch (err: any) {
-      setVoiceState("error");
       setErrorDetail(err.message || "Unable to initialize voice assistant");
       setStatusMessage("Voice connection failed");
     }
-  };
+  }, [conversation]);
 
-  const endVoiceSession = () => {
-    if (socketRef.current) {
-      socketRef.current.close();
-      socketRef.current = null;
+  const endVoiceSession = useCallback(async () => {
+    try {
+      await conversation.endSession();
+    } catch (err) {
+      console.error("Error ending session:", err);
     }
-    setVoiceState("idle");
+    setActiveProposal(null);
     setStatusMessage("Voice session ended");
-    setSignedUrl(null);
-  };
+  }, [conversation]);
 
   const simulateTaskProposal = async () => {
     // Demo/Mock tool invocation for testing approval gating in UI
-    setVoiceState("connecting");
     setStatusMessage("Proposing task via voice...");
 
     try {
@@ -99,15 +125,16 @@ export function VoiceAssistant({ onProposalCreated }: VoiceAssistantProps) {
 
       const data = await res.json();
       if (data.success && data.action_required === "telegram_confirmation") {
-        setVoiceState("pending_confirmation");
         setActiveProposal({
           id: data.result?.proposalId || "prop-voice-1",
           title: "Review Q3 Financial Reports",
         });
+        if (onProposalCreated) {
+          onProposalCreated(data.result);
+        }
         setStatusMessage(data.spoken_response || "Proposal created! Awaiting Telegram confirmation.");
       }
     } catch (err: any) {
-      setVoiceState("error");
       setErrorDetail(err.message || "Failed to propose task");
     }
   };
@@ -298,5 +325,13 @@ export function VoiceAssistant({ onProposalCreated }: VoiceAssistantProps) {
         </button>
       </div>
     </div>
+  );
+}
+
+export function VoiceAssistant(props: VoiceAssistantProps) {
+  return (
+    <ConversationProvider>
+      <VoiceAssistantInner {...props} />
+    </ConversationProvider>
   );
 }
