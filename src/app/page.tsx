@@ -82,6 +82,29 @@ export default function HomePage() {
           ))}
         </div>
 
+        {/* Quick OAuth Actions */}
+        <div style={{ textAlign: "center", marginBottom: "2rem" }}>
+          <a
+            href="/api/auth/google"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "8px",
+              background: "rgba(255, 255, 255, 0.08)",
+              border: "1px solid rgba(255, 255, 255, 0.15)",
+              color: "#F8FAFC",
+              padding: "10px 18px",
+              borderRadius: "8px",
+              fontSize: "0.875rem",
+              fontWeight: 600,
+              textDecoration: "none",
+              transition: "all 0.2s",
+            }}
+          >
+            <span>🔐</span> Connect Google Workspace (Gmail & Calendar)
+          </a>
+        </div>
+
         {/* ElevenLabs Voice Assistant Section */}
         <VoiceAssistant />
 
